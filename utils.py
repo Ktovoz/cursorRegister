@@ -1,9 +1,13 @@
 import ctypes
+import email
 import hashlib
+import imaplib
 import json
 import os
 import random
+import re
 import shutil
+import smtplib
 import sqlite3
 import string
 import subprocess
@@ -11,20 +15,23 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from functools import wraps
 from pathlib import Path
 from typing import (
     Any,
     Callable,
     ContextManager,
-    Dict,
     Generic,
     Tuple,
     TypeVar,
-    Union,
-    Optional
+    Union
 )
+from typing import Dict, Optional
+from typing import List
 
 import requests
 from loguru import logger
@@ -608,6 +615,225 @@ class MoemailManager:
         except Exception as e:
             logger.error(f"获取邮件内容时发生错误: {str(e)}")
             return Result.fail(str(e))
+
+
+@dataclass
+class SmtpConfig:
+    """SMTP服务器配置（用于发送邮件）"""
+    server: str
+    port: int
+    username: str
+    password: str
+
+
+@dataclass
+class ImapConfig:
+    """IMAP服务器配置（用于接收邮件）"""
+    server: str
+    port: int
+    username: str
+    password: str
+
+
+class EmailClient:
+    def __init__(self, smtp_config: Optional[SmtpConfig] = None, imap_config: Optional[ImapConfig] = None):
+        """
+        初始化邮件客户端
+
+        Args:
+            smtp_config: SMTP配置，用于发送邮件，如果不需要发送功能可以为None
+            imap_config: IMAP配置，用于接收邮件，如果不需要接收功能可以为None
+        """
+        self.smtp_config = smtp_config
+        self.imap_config = imap_config
+
+    def send_email(self, to_addresses: List[str], subject: str, body: str, is_html: bool = False) -> bool:
+        """发送邮件"""
+        if not self.smtp_config:
+            logger.error("未配置SMTP服务器，无法发送邮件")
+            return False
+
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = self.smtp_config.username
+            msg['To'] = ', '.join(to_addresses)
+            msg['Subject'] = subject
+
+            content_type = 'html' if is_html else 'plain'
+            msg.attach(MIMEText(body, content_type, 'utf-8'))
+
+            logger.info(f"正在发送邮件到 {', '.join(to_addresses)}")
+            with smtplib.SMTP_SSL(self.smtp_config.server, self.smtp_config.port) as server:
+                server.login(self.smtp_config.username, self.smtp_config.password)
+                try:
+                    server.send_message(msg)
+                except smtplib.SMTPServerDisconnected as e:
+                    if str(e) == "(-1, b'\\x00\\x00\\x00')":
+                        logger.success("邮件发送成功")
+                        return True
+                    raise e
+            logger.success("邮件发送成功")
+            return True
+
+        except Exception as e:
+            logger.error(f"发送邮件时出错: {str(e)}")
+            return False
+
+    def receive_emails(self, folder: str = 'INBOX', limit: int = 10) -> List[dict]:
+        """接收邮件"""
+        if not self.imap_config:
+            logger.error("未配置IMAP服务器，无法接收邮件")
+            return []
+
+        try:
+            logger.info(f"正在从 {folder} 文件夹获取最新的 {limit} 封邮件")
+            with imaplib.IMAP4_SSL(self.imap_config.server, self.imap_config.port) as imap:
+                imap.login(self.imap_config.username, self.imap_config.password)
+                imap.select(folder)
+
+                _, message_numbers = imap.search(None, 'ALL')
+                email_list = []
+
+                for num in message_numbers[0].split()[-limit:]:
+                    logger.debug(f"正在处理邮件 ID: {num}")
+                    _, msg_data = imap.fetch(num, '(RFC822)')
+                    email_body = msg_data[0][1]
+                    email_message = email.message_from_bytes(email_body)
+
+                    subject = email.header.decode_header(email_message['Subject'])[0][0]
+                    if isinstance(subject, bytes):
+                        subject = subject.decode()
+
+                    from_addr = email.header.decode_header(email_message['From'])[0][0]
+                    if isinstance(from_addr, bytes):
+                        from_addr = from_addr.decode()
+
+                    date = email_message['Date']
+
+                    # 获取邮件内容
+                    body = ""
+                    if email_message.is_multipart():
+                        for part in email_message.walk():
+                            if part.get_content_type() == "text/plain":
+                                body = part.get_payload(decode=True).decode()
+                                break
+                    else:
+                        body = email_message.get_payload(decode=True).decode()
+
+                    email_list.append({
+                        'subject': subject,
+                        'from': from_addr,
+                        'date': date,
+                        'body': body
+                    })
+                    logger.debug(f"成功解析邮件: {subject}")
+
+                logger.success(f"成功获取 {len(email_list)} 封邮件")
+                return email_list
+
+        except Exception as e:
+            logger.error(f"接收邮件时出错: {str(e)}")
+            return []
+
+
+class EmailProcessor:
+    def __init__(self, email_client: EmailClient):
+        self.email_client = email_client
+        # 邮件日期格式的正则表达式
+        self.date_pattern = re.compile(r'([A-Za-z]+), (\d+) ([A-Za-z]+) (\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-]\d{4})')
+        # 月份名称映射
+        self.month_map = {
+            'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+            'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
+        }
+
+    def _parse_date(self, date_str: str) -> datetime:
+        """解析邮件日期字符串为datetime对象"""
+        try:
+            # 匹配日期字符串
+            match = self.date_pattern.match(date_str)
+            if not match:
+                logger.error(f"日期格式不匹配: {date_str}")
+                return datetime.now(timezone.utc)
+
+            # 解析各个部分
+            _, day, month, year, hour, minute, second, tz = match.groups()
+
+            # 转换月份名称为数字
+            month_num = self.month_map.get(month, 1)
+
+            # 解析时区偏移
+            tz_hours = int(tz[:3])
+            tz_minutes = int(tz[0] + tz[3:])
+            tz_offset = timedelta(hours=tz_hours, minutes=tz_minutes)
+
+            # 创建datetime对象
+            dt = datetime(
+                year=int(year),
+                month=month_num,
+                day=int(day),
+                hour=int(hour),
+                minute=int(minute),
+                second=int(second),
+                tzinfo=timezone(tz_offset)
+            )
+
+            logger.debug(f"日期解析: {date_str} -> {dt}")
+            return dt
+
+        except Exception as e:
+            logger.error(f"解析日期时出错: {str(e)}, 日期字符串: {date_str}")
+            return datetime.now(timezone.utc)
+
+    def wait_for_new_email(self,
+                           timeout_seconds: int = 300,
+                           check_interval: int = 10,
+                           folder: str = 'INBOX') -> Optional[Dict]:
+        """
+        等待并监听新邮件
+
+        Args:
+            timeout_seconds: 最大等待时间（秒）
+            check_interval: 检查间隔时间（秒）
+            folder: 邮件文件夹名称
+
+        Returns:
+            Optional[Dict]: 如果收到新邮件则返回邮件信息，超时则返回None
+        """
+        logger.info(f"开始监听新邮件，最大等待时间：{timeout_seconds}秒")
+
+        # 获取初始最新邮件
+        initial_emails = self.email_client.receive_emails(folder=folder, limit=1)
+        if not initial_emails:
+            logger.warning("无法获取初始邮件，但将继续监听新邮件")
+            initial_latest_time = datetime.now(timezone.utc)
+        else:
+            initial_email = initial_emails[0]
+            initial_latest_time = self._parse_date(initial_email['date'])
+
+        start_time = time.time()
+        while time.time() - start_time < timeout_seconds:
+            # 等待指定的检查间隔时间
+            time.sleep(check_interval)
+
+            # 获取最新邮件
+            latest_emails = self.email_client.receive_emails(folder=folder, limit=1)
+            if not latest_emails:
+                continue
+
+            latest_email = latest_emails[0]
+            latest_time = self._parse_date(latest_email['date'])
+
+            # 如果发现新邮件
+            if latest_time > initial_latest_time:
+                logger.success("收到新邮件！")
+                return latest_email
+
+            logger.debug(f"等待中... 剩余时间：{int(timeout_seconds - (time.time() - start_time))}秒")
+
+        logger.warning(f"等待超时（{timeout_seconds}秒），未收到新邮件")
+        return None
+
 
 if __name__ == "__main__":
     CursorManager().get_cookies()

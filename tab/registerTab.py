@@ -55,7 +55,8 @@ class RegisterTab(ttk.Frame):
 
         modes = [
             ("自动验证", "auto"),
-            ("全自动", "admin")
+            ("moemail", "admin"),
+            ("代收mail", "imap")
         ]
 
         for text, value in modes:
@@ -216,7 +217,8 @@ class RegisterTab(ttk.Frame):
 
                 if not (register_method := {
                     "auto": self.registrar.auto_register,
-                    "admin": self.registrar.admin_auto_register
+                    "admin": self.registrar.admin_auto_register,
+                    "imap": self.registrar.imap_auto_register
                 }.get(mode)):
                     raise ValueError(f"未知的注册模式: {mode}")
 

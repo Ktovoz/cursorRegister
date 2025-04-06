@@ -9,7 +9,7 @@ from loguru import logger
 
 from utils import MoemailManager
 from utils import Utils
-
+from utils import EmailClient,EmailProcessor,ImapConfig
 
 class CursorRegistration:
     CURSOR_URL = "https://www.cursor.com/"
@@ -104,7 +104,7 @@ class CursorRegistration:
                     raise Exception(f"在{action_description}时超时")
         return False
 
-    def auto_register(self, wait_callback=None, admin=False):
+    def auto_register(self, wait_callback=None, admin=0):
         try:
             self.init_browser()
             self.fill_registration_form()
@@ -133,8 +133,13 @@ class CursorRegistration:
             ):
                 raise Exception("无法进入邮箱验证页面")
 
-            if admin:
+            if admin == 1:
                 email_data = self.get_email_data()
+                verify_code = self.parse_cursor_verification_code(email_data)
+                time.sleep(random.uniform(1, 3))
+                self.input_email_verification(verify_code)
+            if admin == 2:
+                email_data=self.new_email['body']
                 verify_code = self.parse_cursor_verification_code(email_data)
                 time.sleep(random.uniform(1, 3))
                 self.input_email_verification(verify_code)
@@ -163,7 +168,7 @@ class CursorRegistration:
         self.moe = MoemailManager()
         email_info = self.moe.create_email(email=self.email)
         logger.debug(f"已创建邮箱 ： {email_info.data.get('email')}")
-        token = self.auto_register(wait_callback=wait_callback, admin=True)
+        token = self.auto_register(wait_callback=wait_callback, admin=1)
         if token:
             env_updates = {
                 "COOKIES_STR": f"WorkosCursorSessionToken={token}",
@@ -172,7 +177,42 @@ class CursorRegistration:
             }
             Utils.update_env_vars(env_updates)
         return token
+    def imap_auto_register(self, wait_callback=None):
+        imap_config = EmailClient.ImapConfig(
+            server=os.getenv("MAIL_SERVER"),
+            port=os.getenv("MAIL_PORT"),
+            username=os.getenv("MAIL_USER"),
+            password=os.getenv("MAIL_PASS")
+        )
+        client = EmailClient(imap_config=imap_config)
+        processor = EmailProcessor(client)
 
+        # 示例：等待新邮件
+        logger.info("开始监听新邮件示例...")
+        self.new_email = processor.wait_for_new_email(
+            timeout_seconds=180,  # 等待60秒
+            check_interval=5  # 每5秒检查一次
+        )
+
+        if self.new_email:
+            logger.info("=" * 50)
+            logger.info("收到新邮件详细信息：")
+            logger.info(f"主题: {self.new_email['subject']}")
+            logger.info(f"发件人: {self.new_email['from']}")
+            logger.info(f"日期: {self.new_email['date']}")
+            logger.info(f"内容预览: {self.new_email['body'][:100]}...")
+            logger.info("=" * 50)
+        else:
+            logger.info("超时未收到新邮件")
+        token = self.auto_register(wait_callback=wait_callback, admin=2)
+        if token:
+            env_updates = {
+                "COOKIES_STR": f"WorkosCursorSessionToken={token}",
+                "EMAIL": self.email,
+                "PASSWORD": self.password
+            }
+            Utils.update_env_vars(env_updates)
+        return token
     def _cursor_turnstile(self):
         max_retries = 5
         for retry in range(max_retries):
