@@ -51,7 +51,7 @@ class CursorRegistration:
     def input_field(self, fields_dict):
         for name, value in fields_dict.items():
             self.tab.ele(f'@name={name}').input(value)
-            time.sleep(random.uniform(1, 4))
+            time.sleep(random.uniform(1, 3))
             logger.debug(f"成功输入 {name}")
             logger.debug(f"{value}")
 
@@ -82,7 +82,7 @@ class CursorRegistration:
             try:
                 if self.tab.wait.url_change(current_url, timeout=5):
                     logger.debug(f"抵达{action_description}")
-                    wait_time = random.uniform(2, 5)
+                    wait_time = random.uniform(1, 3)
                     logger.debug(f"随机等待 {wait_time:.2f} 秒")
                     time.sleep(wait_time)
 
@@ -108,7 +108,7 @@ class CursorRegistration:
         try:
             self.init_browser()
             self.fill_registration_form()
-            time.sleep(random.uniform(1, 4))
+            time.sleep(random.uniform(1, 3))
             submit = self.tab.ele("@type=submit")
             self.tab.actions.move_to(ele_or_loc=submit)
             self.tab.actions.click(submit)
@@ -121,7 +121,7 @@ class CursorRegistration:
                 raise Exception("无法进入密码设置页面")
 
             self.fill_password()
-            time.sleep(random.uniform(1, 4))
+            time.sleep(random.uniform(1, 3))
             submit = self.tab.ele("@type=submit")
             self.tab.actions.move_to(ele_or_loc=submit)
             self.tab.actions.click(submit)
@@ -136,12 +136,14 @@ class CursorRegistration:
             if admin:
                 email_data = self.get_email_data()
                 verify_code = self.parse_cursor_verification_code(email_data)
-                time.sleep(random.uniform(2, 5))
+                time.sleep(random.uniform(1, 3))
                 self.input_email_verification(verify_code)
             else:
                 if wait_callback:
                     try:
-                        wait_callback("请输入邮箱验证码继续")
+                        verify_code=wait_callback("请输入邮箱验证码继续")
+                        time.sleep(random.uniform(1, 3))
+                        self.input_email_verification(verify_code)
                     except Exception as e:
                         logger.info("用户终止了注册流程")
                         return None

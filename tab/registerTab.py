@@ -148,12 +148,22 @@ class RegisterTab(ttk.Frame):
         load_dotenv(override=True)
 
         def create_dialog(message: str) -> bool:
+
             dialog = tk.Toplevel(self)
             dialog.title("等待确认")
             dialog.geometry(f"{DIALOG_WIDTH}x{DIALOG_HEIGHT}")
             UI.center_window(dialog, DIALOG_CENTER_WIDTH, DIALOG_CENTER_HEIGHT)
             dialog.transient(self)
             dialog.grab_set()
+            code_label = ttk.Label(
+                dialog,
+                text="请输入验证码:",
+                style="TLabel"
+            )
+            code_label.pack(pady=(20, 5))
+
+            code_entry = ttk.Entry(dialog)
+            code_entry.pack(pady=5)
             ttk.Label(
                 dialog,
                 text=message,
@@ -165,9 +175,10 @@ class RegisterTab(ttk.Frame):
             button_frame = ttk.Frame(dialog, style='TFrame')
             button_frame.pack(pady=10)
 
-            result = {'continue': True}
+            result = {'continue': True, 'code': ''}
 
             def on_continue():
+                result['code'] = code_entry.get().strip()
                 dialog.destroy()
 
             def on_terminate():
@@ -191,7 +202,7 @@ class RegisterTab(ttk.Frame):
             dialog.wait_window()
             if not result['continue']:
                 raise Exception("用户终止了注册流程")
-
+            return result['code']
         def register_thread():
             try:
                 self.winfo_toplevel().after(0, lambda: UI.show_loading(
