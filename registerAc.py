@@ -35,14 +35,6 @@ class CursorRegistration:
         self.last_name = Utils.generate_random_string(4)
         self.retry_times = 5
         self.browser = self.tab = self.moe = None
-        self.admin = False
-
-    def _safe_action(self, action, *args, **kwargs):
-        try:
-            return action(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"{action.__name__}失败: {str(e)}")
-            raise
 
     def init_browser(self):
         co = ChromiumOptions()
@@ -72,40 +64,6 @@ class CursorRegistration:
 
     def fill_password(self):
         self.input_field({'password': self.password})
-
-    def get_trial_info(self, cookie=None):
-        logger.debug("开始获取试用信息")
-        self.tab.get(self.CURSOR_SETTING_URL)
-        logger.debug(f"已访问设置页面: {self.CURSOR_SETTING_URL}")
-
-        if cookie:
-            logger.debug(f"使用提供的cookie: {cookie}")
-            self.tab.set.cookies(cookie)
-            self.tab.get(self.CURSOR_SETTING_URL)
-            logger.debug("已使用cookie重新加载页面")
-
-        logger.debug("尝试定位使用额度元素")
-        usage_ele = self.tab.ele(
-            "css:div.col-span-2 > div > div > div > div > div:nth-child(1) > div.flex.items-center.justify-between.gap-2 > span.font-mono.text-sm\\/\\[0\\.875rem\\]")
-
-        logger.debug("尝试定位试用天数元素")
-        trial_days = self.tab.ele("css:div > span.ml-1\\.5.opacity-50")
-
-        if not usage_ele:
-            logger.error("未能找到使用额度元素")
-        else:
-            logger.debug(f"成功找到使用额度元素，内容为: {usage_ele.text}")
-
-        if not trial_days:
-            logger.error("未能找到试用天数元素")
-        else:
-            logger.debug(f"成功找到试用天数元素，内容为: {trial_days.text}")
-
-        if not usage_ele or not trial_days:
-            raise ValueError("无法获取试用信息，页面结构可能已更改")
-
-        logger.debug("成功获取所有试用信息")
-        return usage_ele.text, trial_days.text
 
     def get_cursor_token(self):
         for attempt in range(3):
@@ -146,39 +104,10 @@ class CursorRegistration:
                     raise Exception(f"在{action_description}时超时")
         return False
 
-    def semi_auto_register(self, wait_callback=None):
+    def auto_register(self, wait_callback=None, admin=False):
         try:
-            self._safe_action(self.init_browser)
-            self._safe_action(self.fill_registration_form)
-
-            for step, message in [
-                (self.fill_password, "请点击按钮继续"),
-                (lambda: None, "请完成注册和验证码验证后继续")
-            ]:
-                if wait_callback:
-                    try:
-                        wait_callback(message)
-                    except Exception as e:
-                        logger.info("用户终止了注册流程")
-                        return None
-                    self._safe_action(step)
-
-            if token := self._safe_action(self.get_cursor_token):
-                if not Utils.update_env_vars({"COOKIES_STR": f"WorkosCursorSessionToken={token}"}).success:
-                    logger.error("更新环境变量COOKIES_STR失败")
-            return token
-
-        except Exception as e:
-            logger.error(f"注册过程发生错误: {str(e)}")
-            raise
-        finally:
-            if self.browser:
-                self.browser.quit()
-
-    def auto_register(self, wait_callback=None):
-        try:
-            self._safe_action(self.init_browser)
-            self._safe_action(self.fill_registration_form)
+            self.init_browser()
+            self.fill_registration_form()
             time.sleep(random.uniform(1, 4))
             submit = self.tab.ele("@type=submit")
             self.tab.actions.move_to(ele_or_loc=submit)
@@ -191,7 +120,7 @@ class CursorRegistration:
             ):
                 raise Exception("无法进入密码设置页面")
 
-            self._safe_action(self.fill_password)
+            self.fill_password()
             time.sleep(random.uniform(1, 4))
             submit = self.tab.ele("@type=submit")
             self.tab.actions.move_to(ele_or_loc=submit)
@@ -204,11 +133,11 @@ class CursorRegistration:
             ):
                 raise Exception("无法进入邮箱验证页面")
 
-            if self.admin:
+            if admin:
                 email_data = self.get_email_data()
                 verify_code = self.parse_cursor_verification_code(email_data)
                 time.sleep(random.uniform(2, 5))
-                self._safe_action(self.input_email_verification, verify_code)
+                self.input_email_verification(verify_code)
             else:
                 if wait_callback:
                     try:
@@ -216,7 +145,7 @@ class CursorRegistration:
                     except Exception as e:
                         logger.info("用户终止了注册流程")
                         return None
-            if token := self._safe_action(self.get_cursor_token):
+            if token := self.get_cursor_token():
                 if not Utils.update_env_vars({"COOKIES_STR": f"WorkosCursorSessionToken={token}"}).success:
                     logger.error("更新环境变量COOKIES_STR失败")
             return token
@@ -232,8 +161,7 @@ class CursorRegistration:
         self.moe = MoemailManager()
         email_info = self.moe.create_email(email=self.email)
         logger.debug(f"已创建邮箱 ： {email_info.data.get('email')}")
-        self.admin = True
-        token = self._safe_action(self.auto_register, wait_callback)
+        token = self.auto_register(wait_callback=wait_callback, admin=True)
         if token:
             env_updates = {
                 "COOKIES_STR": f"WorkosCursorSessionToken={token}",

@@ -54,7 +54,6 @@ class RegisterTab(ttk.Frame):
         mode_label.pack(side=tk.LEFT, padx=(3, 8))
 
         modes = [
-            ("人工验证", "semi"),
             ("自动验证", "auto"),
             ("全自动", "admin")
         ]
@@ -206,7 +205,6 @@ class RegisterTab(ttk.Frame):
 
                 if not (register_method := {
                     "auto": self.registrar.auto_register,
-                    "semi": self.registrar.semi_auto_register,
                     "admin": self.registrar.admin_auto_register
                 }.get(mode)):
                     raise ValueError(f"未知的注册模式: {mode}")
